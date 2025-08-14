@@ -90,7 +90,7 @@ def combine_adjacent_blanks(blanks):
 
     return blanks_adjoined
 
-def get_significant_crossovers_and_blanks(df, simmap, count_unknown_ibd2_co):
+def get_significant_crossovers_and_blanks(df, simmap, count_ambiguous_co, count_doubles):
     sig_crossovers = []
     sig_crossovers_p2 = []
     sig_blanks = []
@@ -114,17 +114,17 @@ def get_significant_crossovers_and_blanks(df, simmap, count_unknown_ibd2_co):
 
             if curr_row['overlaps_anywhere'] and not seg_starts_chromosome and not ibd_start_connected_to_ibd2:
                 sig_crossovers.append(starting_crossover)
-            elif not seg_starts_chromosome and not ibd_start_connected_to_ibd2:
+            elif count_ambiguous_co and not seg_starts_chromosome and not ibd_start_connected_to_ibd2:
                 sig_crossovers_p2.append(starting_crossover)
 
             if curr_row['overlaps_anywhere'] and not seg_ends_chromosome and not ibd_end_connected_to_ibd2:
                 sig_crossovers.append(ending_crossover)
-            elif not seg_ends_chromosome and not ibd_end_connected_to_ibd2:
+            elif count_ambiguous_co and not seg_ends_chromosome and not ibd_end_connected_to_ibd2:
                 sig_crossovers_p2.append(ending_crossover)
 
             if curr_row['overlaps_anywhere']:
                 sig_blanks.append(seg_blank)
-            else:
+            elif count_ambiguous_co:
                 sig_blanks_p2.append(seg_blank)
 
         elif curr_row['IBD_type'] == 'IBD2':
@@ -134,28 +134,31 @@ def get_significant_crossovers_and_blanks(df, simmap, count_unknown_ibd2_co):
             sig_blanks_p2.append(seg_blank)
 
             # if the start of ibd2 is a crossover, then it is ia significant crossover for both parents
-            if not ibd_start_connected_to_ibd1 and not seg_starts_chromosome:
+            if count_doubles and not ibd_start_connected_to_ibd1 and not seg_starts_chromosome:
                 sig_crossovers.append(starting_crossover)
                 sig_crossovers_p2.append(starting_crossover)
 
             # if the end of the ibd2 is not connect to ibd1, then both are significant crossovers
-            if not ibd_end_connected_to_ibd1 and not seg_ends_chromosome:
+            if count_doubles and not ibd_end_connected_to_ibd1 and not seg_ends_chromosome:
                 sig_crossovers.append(ending_crossover)
                 sig_crossovers_p2.append(ending_crossover)
 
 
-            if count_unknown_ibd2_co:
-                # if the IBD2 is a continuation of ibd1, then there was a crossover for the ibd2 to start.
-                # If the previous row overlaps/the connected ibd1 is shared with the relative, then it is known that the crossover would belong to p1, otherwise p2,
-                if ibd_start_connected_to_ibd1 and prev_row is not None and not prev_row['overlaps_anywhere']:
-                    sig_crossovers.append(starting_crossover)
-                elif ibd_start_connected_to_ibd1 and prev_row is not None and prev_row['overlaps_anywhere']:
-                    sig_crossovers_p2.append(starting_crossover)
+            # if the IBD2 is a continuation of ibd1, then there was a crossover for the ibd2 to start.
+            # If the previous row overlaps/the connected ibd1 is shared with the relative, then it is known that the crossover would belong to p1, otherwise p2,
 
-                if ibd_end_connected_to_ibd1 and next_row is not None and not next_row['overlaps_anywhere']:
-                    sig_crossovers.append(ending_crossover)
-                elif ibd_end_connected_to_ibd1 and next_row is not None and next_row['overlaps_anywhere']:
-                    sig_crossovers_p2.append(ending_crossover)
+            if count_ambiguous_co and not seg_starts_chromosome and ibd_start_connected_to_ibd1 and prev_row is not None and not prev_row['overlaps_anywhere']:
+                sig_crossovers.append(starting_crossover)
+
+            if ibd_start_connected_to_ibd1 and not seg_starts_chromosome and prev_row is not None and prev_row['overlaps_anywhere']:
+                sig_crossovers_p2.append(starting_crossover)
+
+
+            if count_ambiguous_co and not seg_ends_chromosome and ibd_end_connected_to_ibd1 and next_row is not None and not next_row['overlaps_anywhere']:
+                sig_crossovers.append(ending_crossover)
+
+            elif ibd_end_connected_to_ibd1 and not seg_ends_chromosome and next_row is not None and next_row['overlaps_anywhere']:
+                sig_crossovers_p2.append(ending_crossover)
 
     # ibd1 and ibd2 segments that are adjacent and can be considered 1 blank
     sig_blanks = combine_adjacent_blanks(sig_blanks)
@@ -180,8 +183,12 @@ def add_overlaps_cols(seg_df, sib1, sib2, other_relatives: list):
 
     for other_relative in other_relatives:
         sibs_and_other_shared_ibd = seg_df[
-            ((seg_df['sample_1'] == sib1) & (seg_df['sample_2'] == other_relative) |
-             (seg_df['sample_1'] == sib2) & (seg_df['sample_2'] == other_relative))]
+            (
+            ((seg_df['sample_1'] == sib1) & (seg_df['sample_2'] == other_relative))  |
+            ((seg_df['sample_1'] == other_relative) & (seg_df['sample_2'] == sib1)) |
+            ((seg_df['sample_1'] == sib2) & (seg_df['sample_2'] == other_relative)) |
+            ((seg_df['sample_1'] == other_relative) & (seg_df['sample_2'] == sib2))
+             )]
 
         for chromosome in range(1, 23):
             sibs_ibd_at_chromosome = shared_sibling_ibd_segs[shared_sibling_ibd_segs['chromosome'] == chromosome]
@@ -218,7 +225,11 @@ def determine_sibs_and_other_ids(run_id, seg_df):
     filtered = seg_df[(seg_df['sample_1'].str.contains(run_id) | seg_df['sample_2'].str.contains(run_id))]
     relative_ids = list(set(filtered[['sample_1', 'sample_2']].values.flatten()))
     relative_ids = sorted(relative_ids)
+    # relative_ids = relative_ids[::-1]
     # Assumes the first two relatives are siblings
+    # print(relative_ids[2], relative_ids[1], [relative_ids[0]])
+    # return relative_ids[1], relative_ids[2], [relative_ids[0]]
+    print(relative_ids[0], relative_ids[1], relative_ids[2:])
     return relative_ids[0], relative_ids[1], relative_ids[2:]
 
 
@@ -232,8 +243,10 @@ def main(
         map_file,
         window,
         bim,
-        count_unknown_ibd2_co
+        count_ambiguous_co,
+        count_doubles
 ):
+    print("counting ambi co and recombining and checking ids")
     simmap = read_simmap(map_file)
     seg_df = change_seg_file_to_df(input_file)
 
@@ -247,7 +260,7 @@ def main(
 
         sibs_ibd = add_overlaps_cols(seg_df, sib1, sib2, other_ids)  # adds column of T/F overlaps with cousin
 
-        sig_crossovers, sig_blanks, sig_crossovers_p2, sig_blanks_p2 = get_significant_crossovers_and_blanks(sibs_ibd, simmap, count_unknown_ibd2_co)
+        sig_crossovers, sig_blanks, sig_crossovers_p2, sig_blanks_p2 = get_significant_crossovers_and_blanks(sibs_ibd, simmap, count_ambiguous_co, count_doubles)
 
         LOD_all, p1f_len, p2m_len = calc_probability_using_both_parents(sig_crossovers, sig_blanks, sig_crossovers_p2, sig_blanks_p2, simmap, window)
         # LOD_all, LOD_co, LOD_gaps, f_sum_co, m_sum_co = calc_probability_mf(sig_crossovers, sig_blanks, simmap, window)
@@ -290,13 +303,15 @@ if __name__ == "__main__":
     parser.add_argument('-i', '--input', type=Path, help='Name of the segment input file')
     parser.add_argument('-o', '--output', type=Path, help='Name of the output file')
     parser.add_argument('-m', '--simmap', type=Path, help='Name of the genetic map file (should be in .simmap format)')
-    parser.add_argument('-c', '--count_ibd2_co', type=bool, help='True/False - count ambigious ibd2 crossovers')
+    parser.add_argument('-c', '--count_ambiguous_co', type=bool, help='True/False - count ambigious ibd2 crossovers')
 
     # optional
     parser.add_argument('-b', '--bim',
                         help='A PLINK .bim containing the dataset-specific map (should contain 22 autosomes)')
     parser.add_argument('-w', '--window', metavar='window_size_in_kilobases',
                         type=int, default=500, help='Window size in kilobases. Default: 500 kb')
+    parser.add_argument('-d', '--count_doubles',
+                        type=bool, default='True', help='Count double crossovers')
 
     args = parser.parse_args()
 
@@ -306,5 +321,6 @@ if __name__ == "__main__":
         map_file=args.simmap,
         window=args.window,
         bim=args.bim,
-        count_unknown_ibd2_co=args.count_ibd2_co
+        count_ambiguous_co=args.count_ambiguous_co,
+        count_doubles=args.count_doubles
     )
