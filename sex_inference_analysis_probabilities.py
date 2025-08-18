@@ -86,21 +86,41 @@ def calc_probability_mf(significant_crossovers, significant_gaps, simmap, window
 
     return LOD_all, LOD_co, LOD_gaps, sum(female_lengths), sum(male_lengths)
 
-def calc_probability_using_both_parents(sig_crossovers_p1, sig_gaps_p1, sig_crossovers_p2, sig_gaps_p2, simmap, window):
+def calc_probability_using_both_parents(sig_crossovers_p1, sig_gaps_p1, sig_crossovers_p2, sig_gaps_p2, simmap, window, count_p1, count_p2):
     co_prob_f_p1, co_prob_m_p1, female_lengths_co_p1, male_lengths_co_p1 = calc_significant_crossover_probability(sig_crossovers_p1, simmap, window)
     gap_prob_f_p1, gap_prob_m_p1, female_lengths_gap_p1, male_lengths_gap_p1 = calc_significant_gap_probability(sig_gaps_p1, simmap, window)
 
     co_prob_f_p2, co_prob_m_p2, female_lengths_co_p2, male_lengths_co_p2 = calc_significant_crossover_probability(sig_crossovers_p2, simmap, window)
     gap_prob_f_p2, gap_prob_m_p2, female_lengths_gap_p2, male_lengths_gap_p2 = calc_significant_gap_probability(sig_gaps_p2, simmap, window)
 
-    # log product for p1 being female and p2 being male
-    logp_p1f_p2m = log_product(co_prob_f_p1 + gap_prob_f_p1 + co_prob_m_p2 + gap_prob_m_p2)
-
-    # log product for p2 being female and p1 being male
-    logp_p1m_p2f = log_product(co_prob_m_p1 + gap_prob_m_p1 + co_prob_f_p2 + gap_prob_f_p2)
-
-    LOD = logp_p1f_p2m - logp_p1m_p2f
 
     lengths_p1f = female_lengths_co_p1 + male_lengths_co_p2
     lengths_p1m = male_lengths_co_p1 + female_lengths_co_p2
-    return LOD, lengths_p1f, lengths_p1m
+
+    LOD, co_LOD, gap_LOD = 0,0,0
+    if count_p1 and count_p2:
+        co_LOD = sum(co_prob_f_p1 + co_prob_m_p2) - sum(co_prob_m_p1 + co_prob_f_p2)
+        gap_LOD = sum(gap_prob_f_p1 + gap_prob_m_p2) - sum(gap_prob_m_p1 + gap_prob_f_p2)
+
+        # log product for p2 being female and p1 being male
+        logp_p1m_p2f = log_product(co_prob_m_p1 + gap_prob_m_p1 + co_prob_f_p2 + gap_prob_f_p2)
+
+        # log product for p1 being female and p2 being male
+        logp_p1f_p2m = log_product(co_prob_f_p1 + gap_prob_f_p1 + co_prob_m_p2 + gap_prob_m_p2)
+
+        LOD = logp_p1f_p2m - logp_p1m_p2f
+
+    elif count_p1 and not count_p2:
+        co_LOD = log_product(co_prob_f_p1) - log_product(co_prob_m_p1)
+        gap_LOD = log_product(gap_prob_f_p1) - log_product(gap_prob_m_p1)
+
+        LOD = co_LOD + gap_LOD
+
+    elif count_p2 and not count_p1:
+        co_LOD = log_product(co_prob_f_p2) - log_product(co_prob_m_p2)
+        gap_LOD = log_product(gap_prob_f_p2) - log_product(gap_prob_m_p2)
+
+        LOD = co_LOD + gap_LOD
+
+
+    return LOD, co_LOD, gap_LOD
