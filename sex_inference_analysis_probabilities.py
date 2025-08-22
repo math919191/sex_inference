@@ -14,52 +14,44 @@ def get_mf_lengths(chromo, start, end, simmap):
 
     return lengths
 
-def get_co_window(chromo, co_position, window_size, simmap):
+def get_co_window(co_position, chromo, window_size, simmap):
     gmap = simmap[str(chromo)]
     gmap_ends = (gmap['pos'][0], gmap['pos'][-1])
     # don't go beyond the usable ends
     return max(co_position - (window_size / 2), gmap_ends[0]), min(co_position + (window_size / 2), gmap_ends[1])
 
+def get_gap_windows(gap, chromo, window_size, simmap):
+    gmap = simmap[str(chromo)]
+    gmap_ends = (gmap['pos'][0], gmap['pos'][-1])
+    # don't go beyond the usable ends
+    return max(gap['start'] + (window_size / 2), gmap_ends[0]), min(gap['end'] - (window_size / 2), gmap_ends[1])
 
-def calc_significant_crossover_probability(significant_crossovers, simmap, window_size):
+def calc_probability(events, simmap, window_size, is_co):
     list_logp_female = []
     list_logp_male = []
 
-    for sig_co in significant_crossovers:
-        window_start, window_end = get_co_window(sig_co['chromosome'], sig_co['start'], window_size, simmap=simmap)
-
-        lengths = get_mf_lengths(sig_co['chromosome'], window_start, window_end, simmap)
-
-        list_logp_female.append(log_poisson(1, lengths['female']))
-        list_logp_male.append(log_poisson(1, lengths['male']))
-
-    return list_logp_female, list_logp_male
-
-def get_gap_windows(sig_gap, window_size):
-    return sig_gap['start'] + (window_size / 2), sig_gap['end'] - (window_size / 2)
-
-def calc_significant_gap_probability(significant_gaps, simmap, window_size):
-    list_logp_female = []
-    list_logp_male = []
-
-    for sig_gap in significant_gaps:
-        adjusted_start, adjusted_end = get_gap_windows(sig_gap, window_size)
+    for event in events:
+        if is_co:
+            adjusted_start, adjusted_end = get_co_window(event['start'], event["chromosome"], window_size, simmap)
+            num_events = 1
+        else:
+            adjusted_start, adjusted_end = get_gap_windows(event, event["chromosome"], window_size, simmap)
+            num_events = 0
 
         if adjusted_start > adjusted_end:
             print("The start is greater than the end of the segment")
             continue
 
-        lengths = get_mf_lengths(sig_gap['chromosome'], adjusted_start, adjusted_end, simmap)
+        lengths = get_mf_lengths(event['chromosome'], adjusted_start, adjusted_end, simmap)
 
-        list_logp_female.append(log_poisson(0, lengths['female']))
-        list_logp_male.append(log_poisson(0, lengths['male']))
+        list_logp_female.append(log_poisson(num_events, lengths['female']))
+        list_logp_male.append(log_poisson(num_events, lengths['male']))
 
     return list_logp_female, list_logp_male
 
-
 def calc_probability_mf(significant_crossovers, significant_gaps, simmap, window_size):
-    co_list_logp_female, co_list_logp_male = calc_significant_crossover_probability(significant_crossovers, simmap, window_size)
-    gap_list_logp_female, gap_list_logp_male = calc_significant_gap_probability(significant_gaps, simmap, window_size)
+    co_list_logp_female, co_list_logp_male = calc_probability(significant_crossovers, simmap, window_size, is_co=True)
+    gap_list_logp_female, gap_list_logp_male = calc_probability(significant_gaps, simmap, window_size, is_co=False)
 
     logp_female = log_product(co_list_logp_female + gap_list_logp_female + gap_list_logp_female)
     logp_male = log_product(co_list_logp_male + gap_list_logp_male + gap_list_logp_male)
