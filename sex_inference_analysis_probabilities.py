@@ -61,8 +61,8 @@ def calc_probability_mf(significant_crossovers, significant_gaps, simmap, window
     co_list_logp_female, co_list_logp_male = calc_significant_crossover_probability(significant_crossovers, simmap, window_size)
     gap_list_logp_female, gap_list_logp_male = calc_significant_gap_probability(significant_gaps, simmap, window_size)
 
-    logp_female = log_product(co_list_logp_female + gap_list_logp_female + gap_list_logp_male)
-    logp_male = log_product(co_list_logp_male + gap_list_logp_male + gap_list_logp_female)
+    logp_female = log_product(co_list_logp_female + gap_list_logp_female + gap_list_logp_female)
+    logp_male = log_product(co_list_logp_male + gap_list_logp_male + gap_list_logp_male)
 
     LOD_all = logp_female - logp_male
 
