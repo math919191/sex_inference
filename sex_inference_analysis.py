@@ -1,12 +1,12 @@
 import argparse
 from pathlib import Path
+from typing import TypedDict
 
 import pandas as pd
 
 from CREST_sex_inference import read_simmap
-from sex_inference_analysis_probabilities import calc_probability_using_both_parents
-from utils import read_in_seg_file_as_df, remove_dict_dups, combine_adjacent_gaps, is_beginning_or_end_of_chromosome, \
-    has_connected_ibd
+from sex_inference_analysis_probabilities import calc_LOD, calc_probability_mf
+from utils import read_in_seg_file_as_df, is_beginning_or_end_of_chromosome
 
 COLUMN_NAMES = "sample_1", "sample_2", "chromosome", "start", "end", "IBD_type", "genetic_pos_start", "genetic_pos_end", "genetic_len"
 COLUMNS_TO_DROP = ["genetic_pos_start", "genetic_pos_end", "genetic_len"]
@@ -19,172 +19,161 @@ column_type_casting = {
 }
 
 
-def get_significant_crossovers_and_gaps(df, simmap, count_ambiguous_co, count_doubles, count_ibd1, count_ibd2,
-                                        count_non_ambi, remove_dups):
-    sig_crossovers_p1 = []
-    sig_crossovers_p2 = []
-    sig_gaps_p1 = []
-    sig_gaps_p2 = []
+def get_significant_crossovers_and_gaps(relatives_df, simmap):
+    columns = ["sample_1", "sample_2", "chromosome", "start", "end", "is_co", 'from_p1', 'from_p2', 'ambiguous']
 
-    for index in range(len(df)):
-        curr_row = df.iloc[index]
-        prev_row = None if index == 0 else df.iloc[index - 1]
-        next_row = None if index == len(df) - 1 else df.iloc[index + 1]
+    sig_co_and_gaps = []
+
+    for index in range(len(relatives_df)):
+        curr_row = relatives_df.iloc[index]
 
         seg_starts_chromosome, seg_ends_chromosome = is_beginning_or_end_of_chromosome(curr_row, simmap)
 
-        starting_crossover = {'chromosome': curr_row['chromosome'], 'position': curr_row['start']}
-        ending_crossover = {'chromosome': curr_row['chromosome'], 'position': curr_row['end']}
-        seg_gap = {'chromosome': curr_row['chromosome'], "start": curr_row['start'], "end": curr_row['end']}
+        starting_crossover = {'sample_1': curr_row['sample_1'],
+                              'sample_2': curr_row['sample_2'],
+                              'chromosome': curr_row['chromosome'],
+                              'start': curr_row['start'],
+                              'end': curr_row['start'],
+                              'is_co': True,
+                              'from_p1': False,
+                              'from_p2': False,
+                              'ambiguous': False
+                              }
 
-        if curr_row['IBD_type'] == 'IBD1' and count_ibd1:
-            ibd_start_connected_to_ibd2, ibd_end_connected_to_ibd2 = has_connected_ibd(prev_row, curr_row, next_row,
-                                                                                       "IBD2")
-            # can count start co
-            if not seg_starts_chromosome and not ibd_start_connected_to_ibd2:
-                if count_non_ambi and curr_row['overlaps_anywhere']:
-                    sig_crossovers_p1.append(starting_crossover)
-                elif count_ambiguous_co:  # and curr row overlaps with p2 relative
-                    sig_crossovers_p2.append(starting_crossover)
+        ending_crossover = {'sample_1': curr_row['sample_1'],
+                            'sample_2': curr_row['sample_2'],
+                            'chromosome': curr_row['chromosome'],
+                            'start': curr_row['end'],
+                            'end': curr_row['end'],
+                            'is_co': True,
+                            'from_p1': False,
+                            'from_p2': False,
+                            'ambiguous': False
+                            }
 
-            # can count end co
-            if not seg_ends_chromosome and not ibd_end_connected_to_ibd2:
-                if count_non_ambi and curr_row['overlaps_anywhere']:
-                    sig_crossovers_p1.append(ending_crossover)
-                elif count_ambiguous_co:  # and curr row overlaps with p2 relative
-                    sig_crossovers_p2.append(ending_crossover)
+        seg_gap = {'sample_1': curr_row['sample_1'],
+                   'sample_2': curr_row['sample_2'],
+                   'chromosome': curr_row['chromosome'],
+                   "start": curr_row['start'],
+                   "end": curr_row['end'],
+                   'is_co': False,
+                   'from_p1': False,
+                   'from_p2': False,
+                   'ambiguous': False
+                   }
 
-            # count the gap
-            if count_non_ambi and curr_row['overlaps_anywhere']:
-                sig_gaps_p1.append(seg_gap)
-            elif count_ambiguous_co:  # and curr row overlaps with p2 relative
-                sig_gaps_p2.append(seg_gap)
+        if curr_row['IBD_type'] == 'IBD2':
+            continue
 
-        elif curr_row['IBD_type'] == 'IBD2' and count_ibd2:
-            ibd_start_connected_to_ibd1, ibd_end_connected_to_ibd1 = has_connected_ibd(prev_row, curr_row, next_row,
-                                                                                       "IBD1")
-            sig_gaps_p1.append(seg_gap)
-            sig_gaps_p2.append(seg_gap)
+        if curr_row['overlaps_p1'] and not curr_row['overlaps_p2']:
 
-            # if the start of ibd2 is a crossover, then it is ia significant crossover for both parents
-            if count_doubles and not ibd_start_connected_to_ibd1 and not seg_starts_chromosome:
-                sig_crossovers_p1.append(starting_crossover)
-                sig_crossovers_p2.append(starting_crossover)
+            if not seg_starts_chromosome:
+                starting_crossover['from_p1'] = True
+                sig_co_and_gaps.append(starting_crossover)
 
-            # if the end of the ibd2 is not connect to ibd1, then both are significant crossovers
-            if count_doubles and not ibd_end_connected_to_ibd1 and not seg_ends_chromosome:
-                sig_crossovers_p1.append(ending_crossover)
-                sig_crossovers_p2.append(ending_crossover)
+            if not seg_ends_chromosome:
+                ending_crossover['from_p1'] = True
+                sig_co_and_gaps.append(ending_crossover)
 
-            # if the IBD2 is a continuation of ibd1, then there was a crossover for the ibd2 to start.
-            # If the previous row overlaps/the connected ibd1 is shared with the relative, then it is known that the crossover would belong to p2, otherwise p1
+            seg_gap['from_p1'] = True
+            sig_co_and_gaps.append(seg_gap)
 
-            # checking to see if is valid to consider the start of the ibd2 segment connected to ibd1
-            if not seg_starts_chromosome and ibd_start_connected_to_ibd1 and prev_row is not None:
 
-                if count_ambiguous_co and not prev_row['overlaps_anywhere']:  # and prev row overlaps with p2 relative
-                    sig_crossovers_p1.append(starting_crossover)
+        elif not curr_row['overlaps_p1'] and curr_row['overlaps_p2']:
 
-                if prev_row['overlaps_anywhere']:  # and prev row does NOT overlap with p2 relative
-                    sig_crossovers_p2.append(starting_crossover)
+            if not seg_starts_chromosome:
+                starting_crossover['from_p2'] = True
+                sig_co_and_gaps.append(starting_crossover)
 
-            # checking to see if is valid to consider the end of the ibd2 segment
-            if not seg_ends_chromosome and ibd_end_connected_to_ibd1 and next_row is not None:
+            if not seg_ends_chromosome:
+                ending_crossover['from_p2'] = True
+                sig_co_and_gaps.append(ending_crossover)
 
-                if count_ambiguous_co and not next_row['overlaps_anywhere']:  # and next row overlaps with p2 relative
-                    sig_crossovers_p1.append(ending_crossover)
+            seg_gap['from_p2'] = True
+            sig_co_and_gaps.append(seg_gap)
 
-                if next_row['overlaps_anywhere']:  # and next row overlaps doesn't overlap with p2 relative
-                    sig_crossovers_p2.append(ending_crossover)
-
-    # ibd1 and ibd2 segments that are adjacent and can be considered 1 gap
-    sig_gaps_p1 = combine_adjacent_gaps(sig_gaps_p1)
-    sig_gaps_p2 = combine_adjacent_gaps(sig_gaps_p2)
-
-    print("Lens before", len(sig_crossovers_p1), len(sig_crossovers_p2), len(sig_gaps_p1), len(sig_gaps_p2))
-
-    if remove_dups:
-        sig_crossovers_p1 = remove_dict_dups(sig_crossovers_p1)
-        sig_crossovers_p2 = remove_dict_dups(sig_crossovers_p2)
-        sig_gaps_p1 = remove_dict_dups(sig_gaps_p1)
-        sig_gaps_p2 = remove_dict_dups(sig_gaps_p2)
-
-    print("Lens after", len(sig_crossovers_p1), len(sig_crossovers_p2), len(sig_gaps_p1), len(sig_gaps_p2))
-
-    return sig_crossovers_p1, sig_gaps_p1, sig_crossovers_p2, sig_gaps_p2
+    return pd.DataFrame(sig_co_and_gaps)
 
 
 def overlaps(ibd_seg_1, ibd_seg_2):
-    return ibd_seg_1['start'] <= ibd_seg_2['end'] and ibd_seg_1['end'] >= ibd_seg_2['start']
+    ret = ibd_seg_1['start'] <= ibd_seg_2['end'] and ibd_seg_1['end'] >= ibd_seg_2['start']
+    return ret
+
+def seg_overlaps_with_other_ibd_df(seg, other_ibd_df):
+    other_ibd_df = other_ibd_df[other_ibd_df['chromosome'] == seg['chromosome']]
+
+    for _, other_ibd_seg in other_ibd_df.iterrows():
+        # assumes other_ibd_df is sorted
+        if seg['end'] < other_ibd_seg['start']:
+            break
+
+        if overlaps(seg, other_ibd_seg):
+            return True
+
+    return False
+
+def add_overlap_col_to_ibd_seg_df(ibd_seg_df, ibd_segs_other, overlaps_col_name='overlaps'):
+    # sort the rows by chromosome/start/end
+    ibd_seg_df = ibd_seg_df.sort_values(by=['chromosome', 'start', 'end'], ascending=True)
+    ibd_segs_other = ibd_segs_other.sort_values(by=['chromosome', 'start', 'end'], ascending=True)
+
+    ibd_segs_other_chromo_dict = {
+        chromosome : ibd_segs_other[ibd_segs_other['chromosome'] == chromosome]
+        for chromosome in range(1, 23)
+    }
+
+    ibd_seg_df[overlaps_col_name] = ibd_seg_df.apply(
+        lambda row: bool(seg_overlaps_with_other_ibd_df(row, ibd_segs_other_chromo_dict[row['chromosome']])), axis=1
+    )
+
+    return ibd_seg_df
+
+def get_ibd_segs_between_relatives(seg_df, relatives):
+    return seg_df[seg_df['sample_1'].isin(set(relatives)) & seg_df['sample_2'].isin(set(relatives))]
+
+def get_ibd_segs_shared(seg_df, set1_relatives, set2_relatives):
+    return seg_df[
+        seg_df['sample_1'].isin(set(set1_relatives)) & seg_df['sample_2'].isin(set(set2_relatives)) |
+        seg_df['sample_1'].isin(set(set2_relatives)) & seg_df['sample_2'].isin(set(set1_relatives))
+      ]
 
 
-def add_overlaps_cols(seg_df, sib1, sib2, other_relatives: list, overlaps_col_name='overlaps_anywhere'):
-    shared_sibling_ibd_segs = seg_df[
-        seg_df['sample_1'].isin({sib1, sib2}) & seg_df['sample_1'].isin({sib1, sib2})].copy()
-
-    shared_sibling_ibd_segs.loc[:, overlaps_col_name] = False
-
-    for other_relative in other_relatives:
-        sibs_and_other_shared_ibd = seg_df[
-            (
-                    ((seg_df['sample_1'] == sib1) & (seg_df['sample_2'] == other_relative)) |
-                    ((seg_df['sample_1'] == other_relative) & (seg_df['sample_2'] == sib1)) |
-                    ((seg_df['sample_1'] == sib2) & (seg_df['sample_2'] == other_relative)) |
-                    ((seg_df['sample_1'] == other_relative) & (seg_df['sample_2'] == sib2))
-            )]
-
-        for chromosome in range(1, 23):
-            sibs_ibd_at_chromosome = shared_sibling_ibd_segs[shared_sibling_ibd_segs['chromosome'] == chromosome]
-            sib_other_ibd_at_chromosome = sibs_and_other_shared_ibd[
-                sibs_and_other_shared_ibd['chromosome'] == chromosome]
-
-            for idx, sibs_ibd in sibs_ibd_at_chromosome.iterrows():
-                for _, sib_and_other_ibd in sib_other_ibd_at_chromosome.iterrows():
-                    if sibs_ibd['end'] < sib_and_other_ibd['start']:
-                        break
-
-                    if overlaps(sibs_ibd, sib_and_other_ibd):
-                        shared_sibling_ibd_segs.loc[idx, overlaps_col_name] = True
-                        break
-
-    return shared_sibling_ibd_segs
+def get_ibd_segs_with_relatives(seg_df, relatives):
+    return seg_df[seg_df['sample_1'].isin(set(relatives)) | seg_df['sample_2'].isin(set(relatives))]
 
 
-def determine_sibs_and_other_ids(run_id, seg_df, run):
-    # TODO unhard code this section -- modify so it is not assumed the first two relatives are siblings
-    run_id = run_id + "_"
-    filtered = seg_df[(seg_df['sample_1'].str.contains(run_id) | seg_df['sample_2'].str.contains(run_id))]
-    relative_ids = list(set(filtered[['sample_1', 'sample_2']].values.flatten()))
-    relative_ids = sorted(relative_ids)
-    # print(relative_ids[0], relative_ids[1], relative_ids[2:])
-    # return relative_ids[0], relative_ids[1], relative_ids[2:]
-    if run == 1:
-        return relative_ids[1], relative_ids[0], [relative_ids[2]]
-    elif run == 'sibs_comp':
-        print("sib comps")
-        return relative_ids[1], relative_ids[2], [relative_ids[0]]
-    else:
-        return relative_ids[2], relative_ids[0], [relative_ids[1]]
+def get_all_relative_ids(pedigree_id, seg_df):
+    s1_ids = seg_df.loc[seg_df['sample_1'].str.startswith(f'{pedigree_id}_'), 'sample_1'].tolist()
+    s2_ids = seg_df.loc[seg_df['sample_2'].str.startswith(f'{pedigree_id}_'), 'sample_2'].tolist()
+    all_ids = set(s1_ids + s2_ids)
+    return list(all_ids)
 
 
-def write_output(results, output_file):
+def determine_descendants_and_relatives(pedigree_id, seg_df):
+
+    all_relative_ids = get_all_relative_ids(pedigree_id, seg_df)
+
+    descendants = [f'{pedigree_id}_g5-b1-i1', f'{pedigree_id}_g5-b2-i1', f'{pedigree_id}_g5-b3-i1']
+    p1_relatives = list(set(all_relative_ids) - set(descendants))
+    p2_relatives = []
+
+    return descendants, p1_relatives, p2_relatives
+
+
+def write_df_output(results, output_file):
+    print(f"writing to {output_file}")
     results.to_csv(output_file, sep='\t', index=False, header=True)
+
+
+def get_pedigree_ids(df):
+    pedigree_ids = df['sample_1'].str.split("_").str[0].unique()
+    return pedigree_ids
 
 
 def main(
         input_file,
-        output_file,
         map_file,
-        window,
-        count_ambiguous_co,
-        count_doubles,
-        run_ids,
-        count_ibd1,
-        count_ibd2,
-        count_non_ambi,
-        remove_dups,
-        count_p1,
-        count_p2
+        output_file = 'sig_co_gaps_results.csv'
 ):
     simmap = read_simmap(map_file)
     seg_df = read_in_seg_file_as_df(input_file,
@@ -193,51 +182,105 @@ def main(
                                     sort_order=SORT_ORDER,
                                     column_type_casting=column_type_casting)
 
-    pedigree_ids = seg_df['sample_1'].str.split("_").str[0].unique()
+    pedigree_ids = get_pedigree_ids(seg_df)
 
-    results = pd.DataFrame(columns=["pedigree_id", "sib1", "sib2", "LOD_all", "LOD_co", "LOD_gap"])
+    df_results = []
 
     for pedigree_id in pedigree_ids:
-        sib1, sib2, other_ids = determine_sibs_and_other_ids(pedigree_id, seg_df, 3)
 
-        LOD_sum = 0
+        descendants_ids, p1_relatives_ids, p2_relatives_ids = determine_descendants_and_relatives(pedigree_id, seg_df)
 
-        for run in run_ids:
-            sib1, sib2, other_ids = determine_sibs_and_other_ids(pedigree_id, seg_df, run)
+        descendants_df = get_ibd_segs_between_relatives(seg_df, descendants_ids)
 
-            sibs_ibd = add_overlaps_cols(seg_df, sib1, sib2, other_ids)  # adds column of T/F overlaps with cousin
+        descendants_and_p1_relatives_df = get_ibd_segs_shared(seg_df, descendants_ids, p1_relatives_ids)
+        descendants_and_p2_relatives_df = get_ibd_segs_shared(seg_df, descendants_ids, p2_relatives_ids)
 
-            sig_crossovers_p1, sig_gaps_p1, sig_crossovers_p2, sig_gaps_p2 = get_significant_crossovers_and_gaps(
-                df=sibs_ibd,
-                simmap=simmap,
-                count_ambiguous_co=count_ambiguous_co,
-                count_doubles=count_doubles,
-                count_ibd1=count_ibd1,
-                count_ibd2=count_ibd2,
-                count_non_ambi=count_non_ambi,
-                remove_dups=remove_dups)
+        descendants_df = add_overlap_col_to_ibd_seg_df(descendants_df, descendants_and_p1_relatives_df, overlaps_col_name='overlaps_p1')
+        descendants_df = add_overlap_col_to_ibd_seg_df(descendants_df, descendants_and_p2_relatives_df, overlaps_col_name='overlaps_p2')
 
-            LOD_all, co_LOD, gap_LOD = calc_probability_using_both_parents(sig_crossovers_p1, sig_gaps_p1,
-                                                                           sig_crossovers_p2,
-                                                                           sig_gaps_p2, simmap, window, count_p1,
-                                                                           count_p2)
+        sig_co_and_gaps_df = get_significant_crossovers_and_gaps(descendants_df, simmap=simmap)
 
-            LOD_sum += LOD_all
+        print(sig_co_and_gaps_df)
+        df_results.append(sig_co_and_gaps_df)
 
-        new_row = pd.DataFrame([{
-            "sib1": sib1,
-            "sib2": sib2,
-            "other": other_ids,
-            "LOD_all": LOD_all,
-            "LOD_co": co_LOD,
-            "LOD_gap": gap_LOD
-        }])
+        print(pedigree_id)
 
-        results = pd.concat([results, new_row], ignore_index=True)
+    df_results = pd.concat(df_results, ignore_index=True)
 
-        print(f"PedID: {pedigree_id}: {LOD_sum}")
+    output_file_name = output_file
 
-    write_output(results, output_file)
+    write_df_output(df_results, output_file_name)
+
+class AnalysisParams(TypedDict):
+    window: int
+    count_ambiguous_co: bool
+    remove_dups: bool
+    count_p1: bool
+    count_p2: bool
+
+def read_in_results_file_as_df(file):
+    results_df = pd.read_csv(file, sep='\t')
+    return results_df
+
+def get_pedigree_id_from_file(file):
+    return file.split('_')[-1].split(".")[0]
+
+def do_data_analysis(input_file, data_analysis_params_lists, output_file, simmap):
+
+    simmap = read_simmap(simmap)
+
+    pedigrees_df = read_in_results_file_as_df(input_file)
+    pedigrees_df = pedigrees_df.astype(column_type_casting)
+
+    pedigree_ids = get_pedigree_ids(pedigrees_df)
+
+    data_analysis_results = []
+
+    for pedigree_id in pedigree_ids:
+
+        relative_ids = get_all_relative_ids(pedigree_id, pedigrees_df)
+        pedigree_df = pedigrees_df[pedigrees_df['sample_1'].isin(relative_ids) | pedigrees_df['sample_2'].isin(relative_ids)]
+
+        pedigree_data_analysis_result = {
+            "pedigree_id": pedigree_id,
+        }
+
+
+        # for index, params in enumerate(data_analysis_params_lists):
+        #
+        #     sig_co_gaps_df_copy = pedigree_df.copy()
+        #
+        #     sig_gaps_df = sig_co_gaps_df_copy[sig_co_gaps_df_copy['is_co'] == False].to_dict(orient="records")
+        #     sig_co_df = sig_co_gaps_df_copy[sig_co_gaps_df_copy['is_co'] == True].to_dict(orient="records")
+        #     # if params['remove_dups']:
+        #     #     sig_co_gaps_df_copy = remove_dups(sig_co_gaps_df_copy)
+        #
+        #     if not params['count_p1']:
+        #         # remove anyone that has p1
+        #         sig_co_gaps_df_copy = sig_co_gaps_df_copy[sig_co_gaps_df_copy['from_p1'] == False]
+        #
+        #     if not params['count_p2']:
+        #         # remove anyone that has p2
+        #         sig_co_gaps_df_copy = sig_co_gaps_df_copy[sig_co_gaps_df_copy['from_p2'] == False]
+        #
+        #     if not params['count_ambiguous_co']:
+        #         # remove any ambiguous crossovers
+        #         sig_co_gaps_df_copy = sig_co_gaps_df_copy[sig_co_gaps_df_copy['ambiguous'] == False]
+
+        index = 0
+        params = data_analysis_params_lists[0]
+        sig_gaps_df = pedigree_df[pedigree_df['is_co'] == False].to_dict(orient="records")
+        sig_co_df = pedigree_df[pedigree_df['is_co'] == True].to_dict(orient="records")
+
+        LOD = calc_probability_mf(sig_gaps_df, sig_co_df, simmap, window_size=params['window'])
+        pedigree_data_analysis_result[f'LOD_{index}'] = LOD
+
+        data_analysis_results.append(pedigree_data_analysis_result)
+
+    results_df = pd.DataFrame(data_analysis_results)
+
+    results_df.to_csv(output_file, sep='\t', index=False, header=True)
+
 
 # if __name__ == "__main__":
 #     import sys
